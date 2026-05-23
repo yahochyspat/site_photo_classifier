@@ -1,0 +1,27 @@
+# virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# PyCharm
+.idea/
+
+# datasets and generated files
+data/raw/
+data/sorted/
+data/dataset/train/
+data/dataset/val/
+data/dataset/test/
+results/
+
+# model weights
+models/*.pth
+
+# system files
+.DS_Store
+Thumbs.db
