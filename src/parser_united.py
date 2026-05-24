@@ -5,6 +5,7 @@ import time
 import requests
 from urllib.parse import urljoin, urlparse
 
+
 import shutil
 
 
@@ -24,9 +25,9 @@ def clear_folder(folder):
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RAW_DIR = PROJECT_ROOT / "data" / "raw"
 
-IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"]
+IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".svg"]
 
-
+MAX_IMAGES_PER_SITE = 500
 
 def make_site_name(site_url):
     parsed = urlparse(site_url)
@@ -47,6 +48,65 @@ def get_extension_from_url(img_url):
 
     return ".jpg"
 
+def convert_svg_to_png(svg_path):
+    svg_path = Path(svg_path)
+    png_path = svg_path.with_suffix(".png")
+
+    counter = 1
+    while png_path.exists():
+        png_path = svg_path.with_name(f"{svg_path.stem}_{counter}.png")
+        counter += 1
+
+    try:
+        svg_text = svg_path.read_text(encoding="utf-8", errors="ignore")
+
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <style>
+                html, body {{
+                    margin: 0;
+                    padding: 0;
+                    background: white;
+                    width: 512px;
+                    height: 512px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }}
+
+                svg {{
+                    max-width: 512px;
+                    max-height: 512px;
+                    width: 512px;
+                    height: 512px;
+                }}
+            </style>
+        </head>
+        <body>
+            {svg_text}
+        </body>
+        </html>
+        """
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 512, "height": 512})
+            page.set_content(html, wait_until="load")
+            page.wait_for_timeout(1000)
+            page.screenshot(path=str(png_path), full_page=True)
+            browser.close()
+
+        svg_path.unlink()
+
+        print(f"SVG сконвертирован в PNG: {png_path}")
+        return png_path
+
+    except Exception as error:
+        print(f"Не удалось конвертировать SVG {svg_path.name}: {error}")
+        return None
 
 def get_best_url_from_srcset(srcset):
     if not srcset:
@@ -120,7 +180,7 @@ def extract_image_urls_from_html(site_url, headers):
     return image_urls
 
 
-def extract_image_urls_from_js(site_url, scroll_count=5):
+def extract_image_urls_from_js(site_url, scroll_count=5, max_images=MAX_IMAGES_PER_SITE):
     image_urls = set()
 
     try:
@@ -141,6 +201,9 @@ def extract_image_urls_from_js(site_url, scroll_count=5):
             page.wait_for_timeout(3000)
 
             for _ in range(scroll_count):
+                if len(image_urls) >= max_images:
+                    break
+
                 page.mouse.wheel(0, 3000)
                 page.wait_for_timeout(1000)
 
@@ -207,7 +270,7 @@ def extract_image_urls_from_js(site_url, scroll_count=5):
 
     except Exception as error:
         print(f"JS-парсер не смог обработать страницу: {error}")
-
+    return set(list(image_urls)[:max_images])
     return image_urls
 
 
@@ -236,19 +299,23 @@ def download_images_combined(site_url, output_dir=RAW_DIR):
     print(f"JS-парсер нашёл ссылок: {len(js_urls)}")
 
     image_urls = list(html_urls | js_urls)
+
+    if len(image_urls) > MAX_IMAGES_PER_SITE:
+        image_urls = image_urls[:MAX_IMAGES_PER_SITE]
+
     print(f"Всего уникальных ссылок на изображения: {len(image_urls)}")
 
     saved_files = []
 
-    for i, img_url in enumerate(image_urls):
+    for i, img_url in enumerate(image_urls[:MAX_IMAGES_PER_SITE]):
         try:
             time.sleep(0.3)
 
             response = requests.get(img_url, headers=headers, timeout=20)
             response.raise_for_status()
 
-            content_type = response.headers.get("Content-Type", "")
-            if "image" not in content_type:
+            content_type = response.headers.get("Content-Type", "").lower()
+            if "image" not in content_type and not img_url.lower().endswith(".svg"):
                 continue
 
             ext = get_extension_from_url(img_url)
@@ -265,7 +332,23 @@ def download_images_combined(site_url, output_dir=RAW_DIR):
             with open(filepath, "wb") as file:
                 file.write(response.content)
 
-            saved_files.append(str(filepath))
+            if ext == ".svg":
+                svg_text = Path(filepath).read_text(encoding="utf-8", errors="ignore").lower()
+
+                if "<svg" not in svg_text:
+                    print(f"Файл похож не на SVG, пропускаем: {filepath.name}")
+                    Path(filepath).unlink()
+                    continue
+
+                converted_path = convert_svg_to_png(filepath)
+
+                if converted_path is not None:
+                    saved_files.append(str(converted_path))
+                else:
+                    print(f"SVG пропущен, потому что не удалось конвертировать: {filepath.name}")
+            else:
+                saved_files.append(str(filepath))
+
             print(f"Скачано: {filepath}")
 
         except Exception as error:

@@ -14,7 +14,7 @@ MODEL_DIR = PROJECT_ROOT / "models"
 MODEL_PATH = MODEL_DIR / "photo_classifier.pth"
 
 BATCH_SIZE = 8
-NUM_EPOCHS = 20
+NUM_EPOCHS = 25
 LEARNING_RATE = 0.0001
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
